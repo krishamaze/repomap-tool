@@ -15,12 +15,12 @@ Extracted and adapted from [Aider](https://github.com/Aider-AI/aider)'s repomap 
 ## Installation
 
 ```bash
-pipx install git+https://github.com/flonest/repomap-tool
+pipx install git+https://github.com/krishamaze/repomap-tool
 ```
 
 Or with pip:
 ```bash
-pip install git+https://github.com/flonest/repomap-tool
+pip install git+https://github.com/krishamaze/repomap-tool
 ```
 
 ## Usage

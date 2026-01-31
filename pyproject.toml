@@ -30,8 +30,8 @@ dependencies = [
 repomap = "repomap_tool.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/flonest/repomap-tool"
-Repository = "https://github.com/flonest/repomap-tool"
+Homepage = "https://github.com/krishamaze/repomap-tool"
+Repository = "https://github.com/krishamaze/repomap-tool"
 
 [tool.setuptools.packages.find]
 where = ["src"]
