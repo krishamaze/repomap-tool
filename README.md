@@ -37,6 +37,8 @@ repomap /path/to/your/project
 repomap . --tokens 4096
 ```
 
+The map generator may exceed the requested token budget by up to 10% when that preserves useful structure. It prints a `[WARN]` message when the final map is over the requested limit.
+
 The tool will:
 1. Generate an initial `REPOMAP.md` in the project root
 2. Watch for file changes

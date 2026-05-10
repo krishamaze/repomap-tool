@@ -22,6 +22,7 @@ SQLITE_ERRORS = (sqlite3.OperationalError, sqlite3.DatabaseError, OSError)
 CACHE_VERSION = 3
 if USING_TSL_PACK:
     CACHE_VERSION = 4
+SOFT_TOKEN_OVERAGE = 0.10
 
 ROOT_IMPORTANT_FILES = [
     ".gitignore", ".gitattributes", "README", "README.md", "README.txt", "README.rst",
@@ -309,20 +310,26 @@ class RepoMap:
 
         num_tags = len(ranked_tags)
         low, high = 0, num_tags
-        best_tree = ""; best_tokens = 0
+        soft_limit = math.ceil(self.max_map_tokens * (1 + SOFT_TOKEN_OVERAGE))
+        header = "# Respect the existing repo structure and module boundaries.\n\n"
+        best_tree = ""
+        best_tokens = self.token_count(header)
         
         while low <= high:
             mid = (low + high) // 2
             tree = self.to_tree(ranked_tags[:mid])
-            tokens = self.token_count(tree)
-            if tokens <= self.max_map_tokens:
+            tokens = self.token_count(header + tree)
+            if tokens <= soft_limit:
                 best_tree, best_tokens = tree, tokens
                 low = mid + 1
             else:
                 high = mid - 1
         
-        # Add guiding header for LLM agents
-        header = "# Respect the existing repo structure and module boundaries.\n\n"
+        if best_tokens > self.max_map_tokens:
+            self.io.tool_warning(
+                f"Map is {best_tokens} tokens, over requested {self.max_map_tokens} token limit."
+            )
+
         return header + best_tree
 
     def to_tree(self, tags):
