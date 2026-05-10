@@ -31,6 +31,9 @@ repomap .
 
 # Monitor specific project
 repomap /path/to/your/project
+
+# Use a larger repo map token budget
+repomap . --tokens 4096
 ```
 
 The tool will:

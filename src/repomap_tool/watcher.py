@@ -9,13 +9,14 @@ from watchdog.events import FileSystemEventHandler
 from .repomap_logic import RepoMap
 
 class RepomapWatcher(FileSystemEventHandler):
-    def __init__(self, root_dir, debounce_seconds=10):
+    def __init__(self, root_dir, debounce_seconds=10, map_tokens=2048):
         self.root_dir = os.path.abspath(root_dir)
         self.debounce_seconds = debounce_seconds
+        self.map_tokens = map_tokens
         self.last_change_time = 0
         self.pending_update = False
         self.ignore_spec = self.load_gitignore()
-        self.rm = RepoMap(map_tokens=2048, root=self.root_dir)
+        self.rm = RepoMap(map_tokens=map_tokens, root=self.root_dir)
         self.lock = threading.Lock()
         self._suppress_events = False  # Flag to ignore events during our own writes
 
@@ -83,7 +84,10 @@ class RepomapWatcher(FileSystemEventHandler):
                 print(f"[CLEANUP] Deleted old version: {old_file}")
 
     def run_loop(self):
-        print(f"Monitoring {self.root_dir} (Idle timeout: {self.debounce_seconds}s)")
+        print(
+            f"Monitoring {self.root_dir} "
+            f"(Idle timeout: {self.debounce_seconds}s, tokens: {self.map_tokens})"
+        )
         # Initial update
         self.update_repomap()
         

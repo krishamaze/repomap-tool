@@ -2,6 +2,7 @@ import os
 import math
 import time
 import sqlite3
+import shutil
 import warnings
 import tiktoken
 from collections import Counter, defaultdict, namedtuple
@@ -89,8 +90,38 @@ class RepoMap:
         path = Path(self.root) / self.TAGS_CACHE_DIR
         try:
             self.TAGS_CACHE = Cache(path)
-        except SQLITE_ERRORS:
+        except SQLITE_ERRORS as err:
+            self.tags_cache_error(err)
+
+    def tags_cache_error(self, original_error=None):
+        if self.verbose and original_error:
+            self.io.tool_warning(f"Tags cache error: {original_error}")
+
+        if isinstance(getattr(self, "TAGS_CACHE", None), dict):
+            return
+
+        path = Path(self.root) / self.TAGS_CACHE_DIR
+        try:
+            if path.exists():
+                shutil.rmtree(path)
+
+            new_cache = Cache(path)
+            new_cache["test"] = "test"
+            _ = new_cache["test"]
+            del new_cache["test"]
+            self.TAGS_CACHE = new_cache
+            return
+        except SQLITE_ERRORS as err:
+            self.io.tool_warning(
+                f"Unable to use tags cache at {path}, falling back to memory cache"
+            )
+            if self.verbose:
+                self.io.tool_warning(f"Cache recreation error: {err}")
+
             self.TAGS_CACHE = dict()
+
+    def save_tags_cache(self):
+        pass
 
     def get_rel_fname(self, fname):
         try:
@@ -108,12 +139,37 @@ class RepoMap:
         file_mtime = self.get_mtime(fname)
         if file_mtime is None: return []
         cache_key = fname
-        val = self.TAGS_CACHE.get(cache_key)
+        try:
+            val = self.TAGS_CACHE.get(cache_key)
+        except SQLITE_ERRORS as err:
+            self.tags_cache_error(err)
+            val = self.TAGS_CACHE.get(cache_key)
+
         if val is not None and val.get("mtime") == file_mtime:
-            return val["data"]
+            try:
+                return self.TAGS_CACHE[cache_key]["data"]
+            except SQLITE_ERRORS as err:
+                self.tags_cache_error(err)
+                return self.TAGS_CACHE[cache_key]["data"]
+
         data = list(self.get_tags_raw(fname, rel_fname))
-        self.TAGS_CACHE[cache_key] = {"mtime": file_mtime, "data": data}
+        try:
+            self.TAGS_CACHE[cache_key] = {"mtime": file_mtime, "data": data}
+            self.save_tags_cache()
+        except SQLITE_ERRORS as err:
+            self.tags_cache_error(err)
+            self.TAGS_CACHE[cache_key] = {"mtime": file_mtime, "data": data}
+
         return data
+
+    def _run_captures(self, query, node):
+        if hasattr(query, "captures"):
+            return query.captures(node)
+
+        from tree_sitter import QueryCursor
+
+        cursor = QueryCursor(query)
+        return cursor.captures(node)
 
     def get_tags_raw(self, fname, rel_fname):
         lang = filename_to_lang(fname)
@@ -127,20 +183,21 @@ class RepoMap:
         tool_dir = os.path.dirname(os.path.abspath(__file__))
         query_scm_path = Path(tool_dir) / "queries" / "tree-sitter-language-pack" / f"{lang}-tags.scm"
         if not query_scm_path.exists():
-            query_scm_path = Path(tool_dir) / "queries" / "tree-sitter-languages" / f"tree-sitter-{lang}" / "tags.scm"
+            query_scm_path = Path(tool_dir) / "queries" / "tree-sitter-languages" / f"{lang}-tags.scm"
         
         if not query_scm_path.exists(): return
         query_scm = query_scm_path.read_text()
         code = self.io.read_text(fname)
         if not code: return
         tree = parser.parse(bytes(code, "utf-8"))
-        query = language.query(query_scm)
+        try:
+            from tree_sitter import Query
+
+            query = Query(language, query_scm)
+        except (ImportError, TypeError):
+            query = language.query(query_scm)
         
-        # In tree-sitter 0.22+, Query objects don't have .captures()
-        # We use QueryCursor instead
-        import tree_sitter
-        cursor = tree_sitter.QueryCursor(query)
-        captures = cursor.captures(tree.root_node)
+        captures = self._run_captures(query, tree.root_node)
         
         saw = set()
         all_nodes = []
@@ -245,10 +302,10 @@ class RepoMap:
         ranked_tags = self.get_ranked_tags(other_files)
         
         other_rel = sorted(set(self.get_rel_fname(f) for f in other_files))
-        special = filter_important_files(other_rel)
-        ranked_fnames = set(tag[0] for tag in ranked_tags)
-        special = [(fn,) for fn in special if fn not in ranked_fnames]
-        ranked_tags = special + ranked_tags
+        special_fnames = filter_important_files(other_rel)
+        special_set = set(special_fnames)
+        ranked_tags = [tag for tag in ranked_tags if tag[0] not in special_set]
+        ranked_tags = [(fn,) for fn in special_fnames] + ranked_tags
 
         num_tags = len(ranked_tags)
         low, high = 0, num_tags
