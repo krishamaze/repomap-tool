@@ -33,7 +33,16 @@ class RepomapWatcher(FileSystemEventHandler):
         rel_path = os.path.relpath(path, self.root_dir)
         if path.endswith(os.sep) and not rel_path.endswith(os.sep):
             rel_path += os.sep
-        return self.ignore_spec.match_file(rel_path)
+        if self.ignore_spec.match_file(rel_path):
+            return True
+
+        parts = rel_path.split(os.sep)
+        for index in range(1, len(parts)):
+            parent = "/".join(parts[:index]) + "/"
+            if self.ignore_spec.match_file(parent):
+                return True
+
+        return False
 
     def _content_hash(self, text: str) -> str:
         return hashlib.md5(text.encode("utf-8")).hexdigest()
