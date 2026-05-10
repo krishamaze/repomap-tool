@@ -19,6 +19,6 @@ wheels/
 .installed.cfg
 *.egg
 .repomap_tags_cache*
-REPOMAP.V*
+REPOMAP.md
 venv/
 .venv/

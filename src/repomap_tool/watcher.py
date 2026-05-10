@@ -1,3 +1,4 @@
+import hashlib
 import os
 import sys
 import time
@@ -22,8 +23,7 @@ class RepomapWatcher(FileSystemEventHandler):
 
     def load_gitignore(self):
         gitignore_path = os.path.join(self.root_dir, ".gitignore")
-        # Use explicit pattern for REPOMAP files (handles spaces in filename)
-        patterns = [".git/", ".repomap_tags_cache*", "REPOMAP.V *", "REPOMAP.V*", "venv/", "__pycache__/"]
+        patterns = [".git/", ".repomap_tags_cache*", "REPOMAP.md", "venv/", "__pycache__/"]
         if os.path.exists(gitignore_path):
             with open(gitignore_path, "r") as f:
                 patterns.extend(f.readlines())
@@ -31,11 +31,12 @@ class RepomapWatcher(FileSystemEventHandler):
 
     def is_ignored(self, path):
         rel_path = os.path.relpath(path, self.root_dir)
-        basename = os.path.basename(path)
-        # Explicitly check for our output files
-        if basename.startswith("REPOMAP.V") and basename.endswith(".TXT"):
-            return True
+        if path.endswith(os.sep) and not rel_path.endswith(os.sep):
+            rel_path += os.sep
         return self.ignore_spec.match_file(rel_path)
+
+    def _content_hash(self, text: str) -> str:
+        return hashlib.md5(text.encode("utf-8")).hexdigest()
 
     def on_any_event(self, event):
         if event.is_directory: return
@@ -56,32 +57,73 @@ class RepomapWatcher(FileSystemEventHandler):
                     files.append(full_path)
         return files
 
+    def get_ignored_top_dirs(self):
+        ignored = []
+        try:
+            for entry in os.scandir(self.root_dir):
+                if entry.name.startswith(".") or entry.name in {"__pycache__", "venv"}:
+                    continue
+                if entry.is_dir() and self.is_ignored(entry.path + "/"):
+                    ignored.append(entry.path)
+        except PermissionError:
+            pass
+        return ignored
+
+    def render_dir_tree(self, dir_path: str, max_depth: int = 3) -> str:
+        lines = []
+        rel_base = os.path.relpath(dir_path, self.root_dir)
+        lines.append(f"{rel_base}/")
+
+        for root, dirs, files in os.walk(dir_path):
+            depth = root.replace(dir_path, "").count(os.sep)
+            if depth >= max_depth:
+                dirs.clear()
+                continue
+
+            dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+            indent = "  " * (depth + 1)
+            for dirname in dirs:
+                lines.append(f"{indent}{dirname}/")
+
+            subindent = "  " * (depth + 2)
+            shown_files = sorted(files)[:20]
+            for filename in shown_files:
+                lines.append(f"{subindent}{filename}")
+            if len(files) > 20:
+                lines.append(f"{subindent}... ({len(files) - 20} more files)")
+
+        return "\n".join(lines)
+
     def update_repomap(self):
         print(f"[{datetime.datetime.now()}] Generating new repomap...")
         all_files = self.get_all_files()
         repomap_content = self.rm.get_repo_map(all_files)
-        
-        timestamp = datetime.datetime.now().strftime("%y%m%d_%H%M%S")
-        new_filename = f"REPOMAP.V {timestamp}.TXT"
-        new_path = os.path.join(self.root_dir, new_filename)
+
+        ignored_dirs = self.get_ignored_top_dirs()
+        if ignored_dirs:
+            tier2_lines = ["\n\n## Reference Directories (structure only)\n"]
+            for dir_path in sorted(ignored_dirs):
+                tier2_lines.append(self.render_dir_tree(dir_path))
+                tier2_lines.append("")
+            repomap_content += "\n".join(tier2_lines)
+
+        output_path = os.path.join(self.root_dir, "REPOMAP.md")
+        new_hash = self._content_hash(repomap_content)
+        if os.path.exists(output_path):
+            with open(output_path, "r", encoding="utf-8") as f:
+                existing_hash = self._content_hash(f.read())
+            if new_hash == existing_hash:
+                print(f"[{datetime.datetime.now()}] No structural changes, skipping write.")
+                return
         
         # Suppress events while we write our own files
         self._suppress_events = True
         try:
-            with open(new_path, "w", encoding="utf-8") as f:
+            with open(output_path, "w", encoding="utf-8") as f:
                 f.write(repomap_content)
-            print(f"[{datetime.datetime.now()}] Saved to {new_filename}")
-            self.cleanup_old_versions()
+            print(f"[{datetime.datetime.now()}] Saved to REPOMAP.md")
         finally:
             self._suppress_events = False
-
-    def cleanup_old_versions(self):
-        files = [f for f in os.listdir(self.root_dir) if f.startswith("REPOMAP.V ") and f.endswith(".TXT")]
-        files.sort(reverse=True) # Newest first
-        if len(files) > 2:
-            for old_file in files[2:]:
-                os.remove(os.path.join(self.root_dir, old_file))
-                print(f"[CLEANUP] Deleted old version: {old_file}")
 
     def run_loop(self):
         print(

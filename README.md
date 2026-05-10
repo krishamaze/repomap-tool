@@ -9,7 +9,8 @@ Extracted and adapted from [Aider](https://github.com/Aider-AI/aider)'s repomap 
 - **Syntax-aware code analysis** using tree-sitter
 - **PageRank-based file ranking** - most important files appear first
 - **Auto-regeneration** - watches for file changes, regenerates after 10s idle
-- **Version management** - keeps last 2 versions, deletes older ones
+- **Stable output path** - writes `REPOMAP.md` and skips unchanged rewrites
+- **Reference directory outline** - appends structure-only trees for ignored top-level dirs
 - **LLM-optimized output** - includes header to guide AI agents
 
 ## Installation
@@ -37,10 +38,11 @@ repomap . --tokens 4096
 ```
 
 The tool will:
-1. Generate an initial `REPOMAP.V YYMMDD_HHMMSS.TXT` in the project root
+1. Generate an initial `REPOMAP.md` in the project root
 2. Watch for file changes
 3. Regenerate the map 10 seconds after the last edit
-4. Keep only the 2 most recent versions
+4. Skip rewriting `REPOMAP.md` when the generated content is unchanged
+5. Include a compact structure-only section for ignored top-level directories
 
 ## Output Format
 
@@ -56,6 +58,12 @@ src/utils.py:
 ⋮...
 │class Helper:
 ⋮...
+
+## Reference Directories (structure only)
+
+_reference/
+  external-tool/
+    README.md
 ```
 
 ## License
