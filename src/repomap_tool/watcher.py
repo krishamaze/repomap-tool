@@ -74,23 +74,34 @@ class RepomapWatcher(FileSystemEventHandler):
         rel_base = os.path.relpath(dir_path, self.root_dir)
         lines.append(f"{rel_base}/")
 
-        for root, dirs, files in os.walk(dir_path):
-            depth = root.replace(dir_path, "").count(os.sep)
+        def render_children(current_path: str, depth: int):
             if depth >= max_depth:
-                dirs.clear()
-                continue
+                return
 
-            dirs[:] = sorted(d for d in dirs if not d.startswith("."))
-            indent = "  " * (depth + 1)
-            for dirname in dirs:
-                lines.append(f"{indent}{dirname}/")
+            try:
+                entries = sorted(os.scandir(current_path), key=lambda entry: entry.name)
+            except PermissionError:
+                return
 
-            subindent = "  " * (depth + 2)
-            shown_files = sorted(files)[:20]
-            for filename in shown_files:
-                lines.append(f"{subindent}{filename}")
+            dirs = [
+                entry for entry in entries
+                if entry.is_dir() and not entry.name.startswith(".")
+            ]
+            files = [entry for entry in entries if entry.is_file()]
+
+            for entry in dirs:
+                indent = "  " * (depth + 1)
+                lines.append(f"{indent}{entry.name}/")
+                render_children(entry.path, depth + 1)
+
+            subindent = "  " * (depth + 1)
+            shown_files = files[:20]
+            for entry in shown_files:
+                lines.append(f"{subindent}{entry.name}")
             if len(files) > 20:
                 lines.append(f"{subindent}... ({len(files) - 20} more files)")
+
+        render_children(dir_path, 0)
 
         return "\n".join(lines)
 
