@@ -24,6 +24,82 @@ if USING_TSL_PACK:
     CACHE_VERSION = 4
 SOFT_TOKEN_OVERAGE = 0.10
 
+# ── Noise directory patterns ──────────────────────────────────────────────────
+# Matched by basename — applied anywhere in the tree.
+# Primary filter for render_full_tree(); gitignore is secondary.
+NOISE_DIRS: frozenset = frozenset({
+    # Version control internals
+    ".git", ".svn", ".hg", ".fossil",
+    # Python environments & caches
+    "venv", ".venv", "env", ".env", "virtualenv", ".virtualenv",
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".dmypy",
+    ".tox", ".nox", ".eggs", "site-packages", "htmlcov",
+    # JavaScript / TypeScript
+    "node_modules", ".next", ".nuxt", ".svelte-kit", ".turbo",
+    ".parcel-cache", ".vite", ".angular", "storybook-static",
+    # Rust
+    "target",
+    # Java / Kotlin
+    ".gradle", ".m2", "out", "classes",
+    # Ruby
+    ".bundle",
+    # .NET / C#
+    "obj", ".vs", "packages",
+    # C / C++
+    "CMakeFiles", "_build",
+    # Elixir / Erlang
+    "deps",
+    # Haskell
+    ".stack-work", "dist-newstyle",
+    # Swift / iOS
+    "DerivedData", "Pods", ".swiftpm", "Carthage", ".build",
+    # Terraform
+    ".terraform",
+    # Nix
+    "result",
+    # IDE (JetBrains; .vscode intentionally excluded — useful for agents)
+    ".idea", ".fleet",
+    # General cache / temp / coverage
+    ".cache", "tmp", "temp", ".nyc_output", "coverage", "logs",
+    # Build artifact dirs (ambiguous but almost always output)
+    "dist", "build",
+    # Vendored dependencies (Rust/Go/PHP/Ruby all use this as a deps sink)
+    "vendor",
+})
+
+# Directory name suffix patterns (e.g. mypackage.egg-info/)
+NOISE_DIR_SUFFIXES: tuple = (".egg-info", ".dist-info")
+
+# Directory name prefix patterns (e.g. bazel-bin/, cmake-build-release/)
+NOISE_DIR_PREFIXES: tuple = ("bazel-", "cmake-build-", ".repomap_tags_cache")
+
+# File extensions always shown in the tree, at any depth (documentation)
+ALWAYS_SHOW_EXTENSIONS: frozenset = frozenset({
+    ".md", ".mdx", ".rst", ".txt", ".adoc",
+})
+
+# File extensions never shown in the tree (binaries, compiled output, assets)
+NEVER_SHOW_EXTENSIONS: frozenset = frozenset({
+    ".pyc", ".pyo", ".class", ".o", ".a", ".so", ".dll", ".exe",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp",
+    ".woff", ".woff2", ".ttf", ".eot", ".otf",
+    ".map", ".lock", ".bin", ".dat",
+})
+
+
+def is_noise_dir(name: str) -> bool:
+    """Return True if a directory basename matches known noise patterns."""
+    if name in NOISE_DIRS:
+        return True
+    for suffix in NOISE_DIR_SUFFIXES:
+        if name.endswith(suffix):
+            return True
+    for prefix in NOISE_DIR_PREFIXES:
+        if name.startswith(prefix):
+            return True
+    return False
+
+
 ROOT_IMPORTANT_FILES = [
     ".gitignore", ".gitattributes", "README", "README.md", "README.txt", "README.rst",
     "CONTRIBUTING", "CONTRIBUTING.md", "LICENSE", "LICENSE.md", "LICENSE.txt",
@@ -37,6 +113,10 @@ def is_important(file_path):
     file_name = os.path.basename(file_path)
     dir_name = os.path.normpath(os.path.dirname(file_path))
     normalized_path = os.path.normpath(file_path)
+    ext = os.path.splitext(file_name)[1].lower()
+    
+    if ext in ALWAYS_SHOW_EXTENSIONS:
+        return True
     if dir_name == os.path.normpath(".github/workflows") and file_name.endswith(".yml"):
         return True
     return normalized_path in NORMALIZED_ROOT_IMPORTANT_FILES
@@ -300,8 +380,25 @@ class RepoMap:
 
     def get_repo_map(self, other_files):
         if self.max_map_tokens <= 0 or not other_files: return ""
-        ranked_tags = self.get_ranked_tags(other_files)
         
+        header = "# Respect the existing repo structure and module boundaries.\n\n"
+        soft_limit = math.ceil(self.max_map_tokens * (1 + SOFT_TOKEN_OVERAGE))
+
+        # 1. Short-circuit: If the pure structural tree exceeds the budget, skip all semantic parsing
+        base_tree = self.to_tree([], other_files)
+        base_tokens = self.token_count(header + base_tree)
+        if base_tokens > self.max_map_tokens:
+            self.io.tool_warning(
+                f"Map is {base_tokens} tokens, over requested {self.max_map_tokens} token limit."
+            )
+            return header + base_tree
+
+        # 2. Get ranked tags
+        ranked_tags = self.get_ranked_tags(other_files)
+
+        if not hasattr(self, '_render_cache'):
+            self._render_cache = {}
+
         other_rel = sorted(set(self.get_rel_fname(f) for f in other_files))
         special_fnames = filter_important_files(other_rel)
         special_set = set(special_fnames)
@@ -317,13 +414,17 @@ class RepoMap:
         
         while low <= high:
             mid = (low + high) // 2
-            tree = self.to_tree(ranked_tags[:mid])
+            tree = self.to_tree(ranked_tags[:mid], other_files)
             tokens = self.token_count(header + tree)
             if tokens <= soft_limit:
                 best_tree, best_tokens = tree, tokens
                 low = mid + 1
             else:
                 high = mid - 1
+                
+        if not best_tree:
+            best_tree = base_tree
+            best_tokens = base_tokens
         
         if best_tokens > self.max_map_tokens:
             self.io.tool_warning(
@@ -332,26 +433,126 @@ class RepoMap:
 
         return header + best_tree
 
-    def to_tree(self, tags):
-        if not tags: return ""
-        cur_fname = None; cur_abs = None; lois = None; output = ""
-        for tag in sorted(tags) + [(None,)]:
-            this_rel = tag[0]
-            if this_rel != cur_fname:
-                if lois is not None:
-                    output += f"\n{cur_fname}:\n{self.render_tree(cur_abs, cur_fname, lois)}"
-                    lois = None
-                elif cur_fname: output += f"\n{cur_fname}\n"
-                if type(tag) is Tag:
-                    lois = []; cur_abs = tag.fname
-                cur_fname = this_rel
-            if lois is not None: lois.append(tag.line)
-        return "\n".join([l[:100] for l in output.splitlines()]) + "\n"
+    def to_tree(self, tags, all_files):
+        def make_node():
+            return {"dirs": {}, "files": set(), "covered": False}
+
+        def normalize_rel_fname(fname):
+            if not fname:
+                return None
+            if os.path.isabs(fname):
+                rel_fname = self.get_rel_fname(fname)
+            else:
+                rel_fname = fname
+            rel_fname = os.path.normpath(rel_fname)
+            if rel_fname in ("", ".", "..") or rel_fname.startswith(f"..{os.sep}"):
+                return None
+            return rel_fname
+
+        root = make_node()
+        file_to_tags = defaultdict(list)
+        file_to_abs = {}
+        covered_files = set()
+
+        for tag in tags:
+            rel_fname = normalize_rel_fname(tag[0])
+            if not rel_fname:
+                continue
+            covered_files.add(rel_fname)
+            file_to_tags.setdefault(rel_fname, [])
+            if type(tag) is Tag:
+                file_to_tags[rel_fname].append(tag.line)
+                file_to_abs[rel_fname] = tag.fname
+
+        all_rel_fnames = set()
+        for fname in all_files:
+            rel_fname = normalize_rel_fname(fname)
+            if rel_fname:
+                all_rel_fnames.add(rel_fname)
+
+        for rel_fname in sorted(all_rel_fnames | covered_files):
+            parts = rel_fname.split(os.sep)
+            node = root
+            for part in parts[:-1]:
+                node = node["dirs"].setdefault(part, make_node())
+            node["files"].add(parts[-1])
+
+        for rel_fname in covered_files:
+            parts = rel_fname.split(os.sep)
+            node = root
+            node["covered"] = True
+            for part in parts[:-1]:
+                node = node["dirs"].setdefault(part, make_node())
+                node["covered"] = True
+
+        lines = []
+
+        def render_file(rel_fname, depth):
+            indent = "  " * depth
+            file_name = os.path.basename(rel_fname)
+            lois = sorted(set(file_to_tags.get(rel_fname, [])))
+            if not lois:
+                lines.append(f"{indent}{file_name}")
+                return
+
+            lines.append(f"{indent}{file_name}:")
+            abs_fname = file_to_abs.get(rel_fname)
+            if not abs_fname:
+                return
+            for line in self.render_tree(abs_fname, rel_fname, lois).splitlines():
+                lines.append(f"{indent}{line}")
+
+        def render_dir(node, rel_dir, depth):
+            dirs = node["dirs"]
+            files = node["files"]
+            is_leaf = not dirs
+            shown_leaf_files = 0
+
+            for name in sorted(files):
+                ext = os.path.splitext(name)[1].lower()
+                if ext in NEVER_SHOW_EXTENSIONS:
+                    continue
+
+                rel_fname = os.path.join(rel_dir, name) if rel_dir else name
+                if node["covered"]:
+                    if rel_fname not in covered_files:
+                        continue
+                    render_file(rel_fname, depth)
+                elif is_leaf:
+                    if shown_leaf_files >= 20:
+                        remaining = len([f for f in files if os.path.splitext(f)[1].lower() not in NEVER_SHOW_EXTENSIONS]) - shown_leaf_files
+                        lines.append(f"{'  ' * depth}... ({remaining} more files)")
+                        break
+                    render_file(rel_fname, depth)
+                    shown_leaf_files += 1
+
+            for name in sorted(dirs):
+                child = dirs[name]
+                child_rel = os.path.join(rel_dir, name) if rel_dir else name
+                lines.append(f"{'  ' * depth}{name}/")
+                render_dir(child, child_rel, depth + 1)
+
+        render_dir(root, "", 0)
+
+        if not lines:
+            return ""
+        return "\n".join([line[:100] for line in lines]) + "\n"
 
     def render_tree(self, abs_fname, rel_fname, lois):
         mtime = self.get_mtime(abs_fname)
+        cache_key = (abs_fname, mtime, tuple(lois))
+        
+        if not hasattr(self, '_render_cache'):
+            self._render_cache = {}
+            
+        if cache_key in self._render_cache:
+            return self._render_cache[cache_key]
+
         code = self.io.read_text(abs_fname) or ""
         if not code.endswith("\n"): code += "\n"
         context = TreeContext(rel_fname, code, color=False, line_number=False, child_context=False, last_line=False, margin=0, mark_lois=False, loi_pad=0, show_top_of_file_parent_scope=False)
         context.add_lines_of_interest(lois); context.add_context()
-        return context.format()
+        res = context.format()
+
+        self._render_cache[cache_key] = res
+        return res
