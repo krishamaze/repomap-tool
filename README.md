@@ -6,12 +6,15 @@ Extracted and adapted from [Aider](https://github.com/Aider-AI/aider)'s repomap 
 
 ## Features
 
-- **Syntax-aware code analysis** using tree-sitter
-- **PageRank-based file ranking** - most important files appear first
-- **Auto-regeneration** - watches for file changes, regenerates after 10s idle
-- **Stable output path** - writes `REPOMAP.md` and skips unchanged rewrites
-- **Reference directory outline** - appends structure-only trees for ignored top-level dirs
-- **LLM-optimized output** - includes header to guide AI agents
+- **Hybrid tree output** — unified directory hierarchy merging structural skeleton with semantic code snippets; directories covered by tree-sitter show deep symbol context, uncovered directories show full file listings
+- **Syntax-aware code analysis** using tree-sitter (30+ languages)
+- **PageRank-based file ranking** — most important files surface first
+- **Event-driven watcher** — zero CPU usage while idle; wakes only on real file changes, then waits for a 10-second settle window before regenerating
+- **Token-budget aware** — binary-search fits the map within your limit; short-circuits immediately if the bare structure already exceeds the budget
+- **Persistent AST cache** — tree-sitter renders are cached by file + mtime; unchanged files are never re-parsed across binary-search iterations
+- **Atomic writes** — `REPOMAP.md` is written via a temp file + `os.replace` to prevent corruption during concurrent reads
+- **PID lock** — prevents two `repomap` instances from racing on the same directory
+- **Startup setup wizard** — offers to gitignore `REPOMAP.md` and integrate with `AGENTS.md` on first run
 
 ## Installation
 
@@ -33,40 +36,49 @@ repomap .
 # Monitor specific project
 repomap /path/to/your/project
 
-# Use a larger repo map token budget
-repomap . --tokens 4096
+# Custom token budget (default: 8192)
+repomap . --tokens 16384
+
+# Skip the first-run setup prompts (useful for CI)
+repomap . --no-setup
 ```
 
-The map generator may exceed the requested token budget by up to 10% when that preserves useful structure. It prints a `[WARN]` message when the final map is over the requested limit.
+On first run the tool will prompt you to:
+1. Add `REPOMAP.md` to `.gitignore` (recommended — it is auto-generated)
+2. Integrate with `AGENTS.md` — prepend a living-doc reminder, or symlink `AGENTS.md → REPOMAP.md`
 
-The tool will:
+After setup it will:
 1. Generate an initial `REPOMAP.md` in the project root
-2. Watch for file changes
-3. Regenerate the map 10 seconds after the last edit
-4. Skip rewriting `REPOMAP.md` when the generated content is unchanged
-5. Include a compact structure-only section for ignored top-level directories
+2. Sleep with zero CPU until the OS signals a file change
+3. Wait for 10 seconds of inactivity (settle window)
+4. Regenerate the map and write only if the content changed
 
 ## Output Format
+
+The map is a single unified tree. Directories where tree-sitter found symbols show deep code context; directories without coverage show the raw file listing so you always know the full structure.
 
 ```
 # Respect the existing repo structure and module boundaries.
 
-src/main.py:
-⋮...
-│def main():
-⋮...
-
-src/utils.py:
-⋮...
-│class Helper:
-⋮...
-
-## Reference Directories (structure only)
-
-_reference/
-  external-tool/
-    README.md
+src/
+  repomap_tool/
+    cli.py:
+    ⋮
+    │def main():
+    ⋮
+    repomap_logic.py:
+    ⋮
+    │class RepoMap:
+    │    def get_repo_map(self, other_files):
+    ⋮
+    queries/
+      tree-sitter-language-pack/
+        python-tags.scm
+        rust-tags.scm
+        ...
 ```
+
+The map may exceed the requested token budget by up to 10% when that preserves useful structure. A `[WARN]` is printed when the final map is over the limit.
 
 ## License
 

@@ -20,5 +20,6 @@ wheels/
 *.egg
 .repomap_tags_cache*
 REPOMAP.md
+.repomap.pid
 venv/
 .venv/
