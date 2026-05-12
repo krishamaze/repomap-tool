@@ -134,10 +134,10 @@ def main():
         watcher.run_loop()
     except KeyboardInterrupt:
         print("\nStopping repomap watcher...")
-        observer.stop()
     finally:
+        observer.stop()
+        observer.join()
         watcher.cleanup()
-    observer.join()
 
 
 if __name__ == "__main__":
