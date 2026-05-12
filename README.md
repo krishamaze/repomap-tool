@@ -58,7 +58,7 @@ After setup it will:
 The map is a single unified tree. Directories where tree-sitter found symbols show deep code context; directories without coverage show the raw file listing so you always know the full structure.
 
 ```
-# Respect the existing repo structure and module boundaries.
+# Follow the existing repo structure and module boundaries unless the task requires improving them.
 
 src/
   repomap_tool/

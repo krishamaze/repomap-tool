@@ -23,6 +23,10 @@ CACHE_VERSION = 3
 if USING_TSL_PACK:
     CACHE_VERSION = 4
 SOFT_TOKEN_OVERAGE = 0.10
+REPOMAP_HEADER = (
+    "# Follow the existing repo structure and module boundaries "
+    "unless the task requires improving them.\n\n"
+)
 
 # ── Noise directory patterns ──────────────────────────────────────────────────
 # Matched by basename — applied anywhere in the tree.
@@ -381,7 +385,7 @@ class RepoMap:
     def get_repo_map(self, other_files):
         if self.max_map_tokens <= 0 or not other_files: return ""
         
-        header = "# Respect the existing repo structure and module boundaries.\n\n"
+        header = REPOMAP_HEADER
         soft_limit = math.ceil(self.max_map_tokens * (1 + SOFT_TOKEN_OVERAGE))
 
         # 1. Short-circuit: If the pure structural tree exceeds the budget, skip all semantic parsing
@@ -408,7 +412,7 @@ class RepoMap:
         num_tags = len(ranked_tags)
         low, high = 0, num_tags
         soft_limit = math.ceil(self.max_map_tokens * (1 + SOFT_TOKEN_OVERAGE))
-        header = "# Respect the existing repo structure and module boundaries.\n\n"
+        header = REPOMAP_HEADER
         best_tree = ""
         best_tokens = self.token_count(header)
         
